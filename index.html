@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>MiMo 语音工坊 · 文字转语音 / 音色克隆</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1b1f24;--mute:#6b7280;--line:#e2e5ea;--accent:#ff6a00;--accent-fg:#fff;--err:#c62828;--ok:#2e7d32;--chip:#f0f2f5}
+@media (prefers-color-scheme:dark){:root{--bg:#111316;--card:#1a1d21;--fg:#e8eaed;--mute:#9aa0a6;--line:#2b3037;--accent:#ff7d26;--accent-fg:#111;--err:#ef9a9a;--ok:#81c784;--chip:#252a30}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:760px;margin:0 auto}
+h1{font-size:1.4rem;margin:8px 0 2px}
+.sub{color:var(--mute);font-size:.9rem;margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+label{display:block;font-weight:600;font-size:.9rem;margin:12px 0 6px}
+label:first-child{margin-top:0}
+input[type=text],input[type=password],textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+textarea{min-height:110px;resize:vertical}
+input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.row{display:flex;gap:8px;align-items:center}
+.row>input{flex:1;min-width:0}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--line);background:var(--chip);color:var(--fg);padding:9px 14px}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:transparent;font-weight:600;width:100%;padding:12px;margin-top:14px}
+button:disabled{opacity:.55;cursor:not-allowed}
+.tabs{display:flex;background:var(--chip);border-radius:12px;padding:4px;margin-bottom:14px}
+.tabs button{flex:1;border:0;background:transparent;padding:10px 6px}
+.tabs button[aria-selected=true]{background:var(--card);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chips button{font-size:.82rem;padding:5px 10px;border-radius:999px}
+.hint{color:var(--mute);font-size:.82rem;margin:6px 0 0}
+.check{display:flex;gap:8px;align-items:center;font-size:.88rem;color:var(--mute);margin-top:10px}
+details summary{cursor:pointer;color:var(--mute);font-size:.88rem;margin-top:10px}
+.status{margin-top:12px;font-size:.9rem;min-height:1.4em;white-space:pre-wrap;word-break:break-word}
+.status.err{color:var(--err)}.status.ok{color:var(--ok)}
+.out{margin-top:12px}
+audio{width:100%}
+.out a{display:inline-block;margin-top:8px;color:var(--accent);text-decoration:none;font-weight:600}
+.hidden{display:none}
+footer{color:var(--mute);font-size:.8rem;text-align:center;margin-top:20px}
+footer a{color:inherit}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙️ MiMo 语音工坊</h1>
+  <p class="sub">基于小米 MiMo-V2.5-TTS（VoiceDesign / VoiceClone）。文字生成语音，或克隆参考音频的音色。</p>
+
+  <section class="card">
+    <label for="key">API Key</label>
+    <div class="row">
+      <input id="key" type="password" autocomplete="off" placeholder="在 platform.xiaomimimo.com 控制台创建" spellcheck="false">
+      <button id="toggleKey" type="button">显示</button>
+    </div>
+    <label class="check"><input id="remember" type="checkbox"> 在此浏览器记住 Key（仅保存在本地，不会上传到任何服务器）</label>
+    <details>
+      <summary>高级：接口地址</summary>
+      <input id="base" type="text" spellcheck="false" style="margin-top:8px">
+      <p class="hint">默认直连官方接口。若浏览器提示跨域（CORS）失败，可填入你自己的代理地址。</p>
+    </details>
+  </section>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-design" aria-selected="true" data-p="design">文字生成语音</button>
+    <button role="tab" id="tab-clone" aria-selected="false" data-p="clone">音色克隆</button>
+  </div>
+
+  <section id="design" class="card">
+    <label for="d-voice">音色描述</label>
+    <textarea id="d-voice" style="min-height:80px" placeholder="例如：一位中年男性，说标准普通话，嗓音低沉有磁性，像纪录片旁白解说员"></textarea>
+    <div class="chips" id="d-chips"></div>
+    <label for="d-text">要朗读的文本</label>
+    <textarea id="d-text" placeholder="输入文字。支持内联标签，例如 [Whispering] 、（轻声）等风格提示"></textarea>
+    <label class="check"><input id="d-opt" type="checkbox"> 启用 optimize_text_preview（官方示例里的参数，文档未说明作用；若发现多出内容，请保持关闭）</label>
+    <button class="primary" id="d-go">生成语音</button>
+    <div class="status" id="d-status"></div>
+    <div class="out" id="d-out"></div>
+  </section>
+
+  <section id="clone" class="card hidden">
+    <label for="c-file">参考音频（几秒即可，wav / mp3）</label>
+    <input id="c-file" type="file" accept="audio/*,.wav,.mp3">
+    <div class="out" id="c-prev"></div>
+    <label for="c-style">风格指令（可选）</label>
+    <input id="c-style" type="text" placeholder="例如：用温柔缓慢的语气，带一点笑意">
+    <label for="c-text">要朗读的文本</label>
+    <textarea id="c-text" placeholder="输入想让克隆音色说的话，支持中英文"></textarea>
+    <button class="primary" id="c-go">克隆并生成</button>
+    <div class="status" id="c-status"></div>
+    <div class="out" id="c-out"></div>
+  </section>
+
+  <footer>音频由 MiMo 官方接口生成，请求直接从你的浏览器发出。请仅克隆你有权使用的声音。<br>
+  <a href="https://platform.xiaomimimo.com/console/api-keys" target="_blank" rel="noopener">获取 API Key</a></footer>
+</main>
+
+<script>
+const DEFAULT_BASE = "https://api.xiaomimimo.com/v1";
+const $ = s => document.querySelector(s);
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){} },
+  del(k){ try { localStorage.removeItem(k); } catch(e){} }
+};
+
+// ---- 初始化设置 ----
+$("#base").value = store.get("mimo_base") || DEFAULT_BASE;
+const savedKey = store.get("mimo_key");
+if (savedKey) { $("#key").value = savedKey; $("#remember").checked = true; }
+$("#toggleKey").onclick = () => {
+  const k = $("#key"), show = k.type === "password";
+  k.type = show ? "text" : "password";
+  $("#toggleKey").textContent = show ? "隐藏" : "显示";
+};
+function persist(){
+  if ($("#remember").checked) store.set("mimo_key", $("#key").value.trim()); else store.del("mimo_key");
+  const b = $("#base").value.trim();
+  if (b && b !== DEFAULT_BASE) store.set("mimo_base", b); else store.del("mimo_base");
+}
+$("#remember").onchange = persist;
+
+// ---- 标签页 ----
+document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b === btn));
+  $("#design").classList.toggle("hidden", btn.dataset.p !== "design");
+  $("#clone").classList.toggle("hidden", btn.dataset.p !== "clone");
+});
+
+// ---- 音色描述示例 ----
+const PRESETS = {
+  "纪录片旁白": "一位中年男性，说标准普通话，嗓音低沉有磁性，带有轻微的沙哑质感，像纪录片旁白解说员，沉稳而有感染力。",
+  "年迈老先生": "一位年迈的老先生，说带北方口音的普通话，语速缓慢而沉稳，嗓音略带沙哑和沧桑感，像饱经风霜的老爷爷在讲故事。",
+  "热血少年": "一位十几岁的少年，说标准普通话，声音明亮清脆，充满朝气和斗志，语速偏快，情绪饱满，像热血动漫的男主角。",
+  "清冷少年音": "年轻男性，说标准普通话，嗓音干净清透，偏冷淡克制，语速平稳，语气疏离，带一点若有若无的温柔。",
+  "软萌正太": "一个年纪很小的男孩，说普通话，声音软糯稚嫩，语调上扬，天真可爱，带一点奶声奶气。",
+  "温柔御姐": "成熟女性，说标准普通话，嗓音低柔有磁性，气声明显，语速舒缓，从容优雅，带一点慵懒的亲切感。",
+  "元气少女": "年轻女孩，说标准普通话，声音甜而明亮，语调轻快上扬，活泼俏皮，情绪外放，像动漫里的元气担当。",
+  "傲娇少女": "年轻女孩，说标准普通话，声音清脆，语速偏快，嘴上强硬、语气带点别扭和害羞，偶尔拔高音调。",
+  "霸道总裁": "三十岁左右的男性，说标准普通话，嗓音低沉醇厚，语速缓慢，每个字都很有分量，自信强势，带不容拒绝的压迫感。",
+  "沉稳大叔": "四十多岁的男性，说标准普通话，嗓音浑厚略带沙哑，语速不急不缓，温和可靠，像值得信赖的长辈。",
+  "译制片腔": "一位中年男性，说字正腔圆的标准普通话，吐字清晰考究，语调起伏明显，抑扬顿挫，带有老电影译制片的庄重戏剧感。",
+  "新闻播报": "一位女性播音员，说标准普通话，声音清亮端正，语速平稳，吐字清晰，客观中立，像电视新闻主播。",
+  "评书说书": "一位中年男性，说带北方口音的普通话，嗓音洪亮略沙，节奏跌宕，该快则快、该停则停，像传统评书艺人在说书。",
+  "东北大哥": "一位中年男性，说带浓重东北口音的普通话，嗓门大，热情豪爽，语速快，语气幽默接地气。",
+  "反派低语": "一位男性，说标准普通话，嗓音低沉阴冷，语速缓慢，带笑意和玩味，每句话尾音微微拖长，让人不寒而栗。",
+  "睡前故事": "一位年轻女性，说标准普通话，声音温柔轻缓，语速很慢，语气安抚，像在哄孩子入睡。",
+  "ASMR": "Young female, extreme close-up with a binaural ASMR feel. Audible breathing, soft natural lip sounds, speaking very slowly and relaxingly."
+};
+Object.entries(PRESETS).forEach(([name, text]) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = name;
+  b.onclick = () => { $("#d-voice").value = text; };
+  $("#d-chips").appendChild(b);
+});
+
+// ---- 工具函数 ----
+function setStatus(id, msg, cls){ const e = $(id); e.textContent = msg || ""; e.className = "status" + (cls ? " " + cls : ""); }
+
+async function requestAudio(body){
+  const key = $("#key").value.trim();
+  if (!key) throw new Error("请先填写 API Key");
+  persist();
+  const base = ($("#base").value.trim() || DEFAULT_BASE).replace(/\/+$/, "");
+  let res;
+  try {
+    res = await fetch(base + "/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+      body: JSON.stringify(body)
+    });
+  } catch (e) {
+    throw new Error("请求没有发出或被浏览器拦截。\n常见原因：网络不通，或接口不允许跨域（CORS）。可在“高级”中改用你自己的代理地址。");
+  }
+  const raw = await res.text();
+  let data = null;
+  try { data = JSON.parse(raw); } catch(e){}
+  if (!res.ok) {
+    const m = (data && (data.error?.message || data.message)) || raw.slice(0, 300);
+    throw new Error("接口返回错误 " + res.status + "：" + m);
+  }
+  const b64 = data?.choices?.[0]?.message?.audio?.data;
+  if (!b64) throw new Error("响应中没有音频数据：" + raw.slice(0, 300));
+  return b64;
+}
+
+function showAudio(sel, b64, name){
+  const bin = atob(b64), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr], { type: "audio/wav" }));
+  const box = $(sel);
+  const old = box.querySelector("audio"); if (old) URL.revokeObjectURL(old.src);
+  box.innerHTML = "";
+  const a = document.createElement("audio"); a.controls = true; a.src = url;
+  const dl = document.createElement("a"); dl.href = url; dl.download = name + "-" + Date.now() + ".wav"; dl.textContent = "⬇ 下载 WAV";
+  box.append(a, dl);
+  a.play().catch(() => {});
+}
+
+async function run(btn, statusSel, fn){
+  btn.disabled = true; setStatus(statusSel, "生成中，请稍候…");
+  try { await fn(); setStatus(statusSel, "完成 ✓", "ok"); }
+  catch (e) { setStatus(statusSel, e.message, "err"); }
+  finally { btn.disabled = false; }
+}
+
+// ---- 文字生成语音（VoiceDesign）----
+$("#d-go").onclick = () => run($("#d-go"), "#d-status", async () => {
+  const voice = $("#d-voice").value.trim(), text = $("#d-text").value.trim();
+  if (!voice) throw new Error("请填写音色描述");
+  if (!text) throw new Error("请填写要朗读的文本");
+  const b64 = await requestAudio({
+    model: "mimo-v2.5-tts-voicedesign",
+    messages: [{ role: "user", content: voice }, { role: "assistant", content: text }],
+    audio: $("#d-opt").checked ? { format: "wav", optimize_text_preview: true } : { format: "wav" }
+  });
+  showAudio("#d-out", b64, "design");
+});
+
+// ---- 音色克隆（VoiceClone）----
+let refVoice = null;
+$("#c-file").onchange = e => {
+  const f = e.target.files[0]; refVoice = null; $("#c-prev").innerHTML = "";
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) { setStatus("#c-status", "参考音频过大（超过 10MB），请截取几秒到几十秒的片段", "err"); e.target.value = ""; return; }
+  setStatus("#c-status", "");
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  const mime = ext === "mp3" ? "audio/mpeg" : ext === "wav" ? "audio/wav" : (f.type || "audio/wav");
+  const r = new FileReader();
+  r.onload = () => { refVoice = "data:" + mime + ";base64," + String(r.result).split(",")[1]; };
+  r.readAsDataURL(f);
+  const a = document.createElement("audio"); a.controls = true; a.src = URL.createObjectURL(f);
+  $("#c-prev").appendChild(a);
+};
+$("#c-go").onclick = () => run($("#c-go"), "#c-status", async () => {
+  const text = $("#c-text").value.trim();
+  if (!refVoice) throw new Error("请先上传参考音频");
+  if (!text) throw new Error("请填写要朗读的文本");
+  const b64 = await requestAudio({
+    model: "mimo-v2.5-tts-voiceclone",
+    messages: [{ role: "user", content: $("#c-style").value.trim() }, { role: "assistant", content: text }],
+    audio: { format: "wav", voice: refVoice }
+  });
+  showAudio("#c-out", b64, "clone");
+});
+</script>
+</body>
+</html>
