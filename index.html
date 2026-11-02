@@ -38,6 +38,8 @@ details summary{cursor:pointer;color:var(--mute);font-size:.88rem;margin-top:10p
 audio{width:100%}
 .out a{display:inline-block;margin-top:8px;color:var(--accent);text-decoration:none;font-weight:600}
 .hidden{display:none}
+button.rec-on{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+.rec-time{color:var(--err);font-variant-numeric:tabular-nums}
 footer{color:var(--mute);font-size:.8rem;text-align:center;margin-top:20px}
 footer a{color:inherit}
 </style>
@@ -81,6 +83,11 @@ footer a{color:inherit}
   <section id="clone" class="card hidden">
     <label for="c-file">参考音频（几秒即可，wav / mp3）</label>
     <input id="c-file" type="file" accept="audio/*,.wav,.mp3">
+    <div class="row" style="margin-top:8px">
+      <button id="c-rec" type="button">🎤 用麦克风录制</button>
+      <span class="hint rec-time" id="c-rec-time" style="margin:0"></span>
+    </div>
+    <p class="hint">或者直接对着麦克风念 5～20 秒，录音会自动转为 WAV 用于克隆。首次使用请在浏览器弹窗中允许麦克风权限。</p>
     <div class="out" id="c-prev"></div>
     <label for="c-style">风格指令（可选）</label>
     <input id="c-style" type="text" placeholder="例如：用温柔缓慢的语气，带一点笑意">
@@ -218,9 +225,22 @@ $("#d-go").onclick = () => run($("#d-go"), "#d-status", async () => {
 });
 
 // ---- 音色克隆（VoiceClone）----
-let refVoice = null;
+let refVoice = null, rec = null, prevUrl = null;
+
+function setPreview(blob){
+  if (prevUrl) { URL.revokeObjectURL(prevUrl); prevUrl = null; }
+  prevUrl = URL.createObjectURL(blob);
+  const box = $("#c-prev"); box.innerHTML = "";
+  const a = document.createElement("audio"); a.controls = true; a.src = prevUrl;
+  box.appendChild(a);
+}
+function clearPreview(){
+  if (prevUrl) { URL.revokeObjectURL(prevUrl); prevUrl = null; }
+  $("#c-prev").innerHTML = "";
+}
+
 $("#c-file").onchange = e => {
-  const f = e.target.files[0]; refVoice = null; $("#c-prev").innerHTML = "";
+  const f = e.target.files[0]; refVoice = null; clearPreview();
   if (!f) return;
   if (f.size > 10 * 1024 * 1024) { setStatus("#c-status", "参考音频过大（超过 10MB），请截取几秒到几十秒的片段", "err"); e.target.value = ""; return; }
   setStatus("#c-status", "");
@@ -229,12 +249,105 @@ $("#c-file").onchange = e => {
   const r = new FileReader();
   r.onload = () => { refVoice = "data:" + mime + ";base64," + String(r.result).split(",")[1]; };
   r.readAsDataURL(f);
-  const a = document.createElement("audio"); a.controls = true; a.src = URL.createObjectURL(f);
-  $("#c-prev").appendChild(a);
+  setPreview(f);
 };
+
+// 麦克风录制：Web Audio 采集 PCM → 降采样到 16kHz → 编码 WAV
+function encodeWav(samples, rate){
+  const bytes = samples.length * 2;
+  const buf = new ArrayBuffer(44 + bytes), v = new DataView(buf);
+  const str = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + bytes, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, bytes, true);
+  let o = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+  }
+  return buf;
+}
+function downsample(input, inRate, outRate){
+  if (outRate >= inRate) return input;
+  const ratio = inRate / outRate, len = Math.floor(input.length / ratio), out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const start = Math.floor(i * ratio), end = Math.min(Math.floor((i + 1) * ratio), input.length);
+    let sum = 0; for (let j = start; j < end; j++) sum += input[j];
+    out[i] = end > start ? sum / (end - start) : 0;
+  }
+  return out;
+}
+
+function stopRecording(save){
+  if (!rec) return;
+  const r = rec; rec = null;
+  clearInterval(r.timer);
+  try { r.proc.disconnect(); r.gain.disconnect(); r.src.disconnect(); } catch(e){}
+  r.stream.getTracks().forEach(t => t.stop());
+  try { r.ctx.close(); } catch(e){}
+  $("#c-rec").textContent = "🎤 用麦克风录制";
+  $("#c-rec").classList.remove("rec-on");
+  $("#c-rec-time").textContent = "";
+  if (!save) { setStatus("#c-status", ""); return; }
+
+  const total = r.chunks.reduce((n, c) => n + c.length, 0);
+  if (total < r.sampleRate * 1) { setStatus("#c-status", "录制时间太短，请至少说 2 秒以上再停止", "err"); return; }
+  const pcm = new Float32Array(total);
+  let off = 0; r.chunks.forEach(c => { pcm.set(c, off); off += c.length; });
+  const mono = downsample(pcm, r.sampleRate, 16000);
+  const blob = new Blob([encodeWav(mono, 16000)], { type: "audio/wav" });
+  setPreview(blob);
+  const fr = new FileReader();
+  fr.onload = () => { refVoice = String(fr.result); setStatus("#c-status", "麦克风录音已就绪 ✓ 可直接克隆", "ok"); };
+  fr.readAsDataURL(blob);
+}
+
+$("#c-rec").onclick = async () => {
+  if (rec) { stopRecording(true); return; }
+  const btn = $("#c-rec");
+  if (btn.disabled) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("#c-status", "当前环境无法访问麦克风。请用 https 或 localhost 打开本页面，并确认浏览器支持录音。", "err");
+    return;
+  }
+  btn.disabled = true;
+  setStatus("#c-status", "正在请求麦克风权限，请在浏览器弹窗里选择“允许”…");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch(e) {
+    btn.disabled = false;
+    setStatus("#c-status", "麦克风未授权或不可用：" + e.message + "（若没有弹窗，请检查浏览器地址栏的麦克风权限设置）", "err");
+    return;
+  }
+  btn.disabled = false;
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  const src = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const gain = ctx.createGain(); gain.gain.value = 0;
+  const chunks = [];
+  proc.onaudioprocess = ev => { chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0))); };
+  src.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
+
+  refVoice = null; $("#c-file").value = ""; clearPreview(); setStatus("#c-status", "");
+  const t0 = Date.now();
+  rec = { ctx, src, proc, gain, stream, chunks, sampleRate: ctx.sampleRate, timer: null };
+  rec.timer = setInterval(() => {
+    const s = (Date.now() - t0) / 1000;
+    $("#c-rec-time").textContent = "● 录制中 " + s.toFixed(1) + "s" + (s >= 25 ? "（最长 30 秒）" : "");
+    if (s >= 30) stopRecording(true);
+  }, 200);
+  $("#c-rec").textContent = "⏹ 停止录制";
+  $("#c-rec").classList.add("rec-on");
+  $("#c-rec-time").textContent = "● 录制中 0.0s";
+};
+
 $("#c-go").onclick = () => run($("#c-go"), "#c-status", async () => {
   const text = $("#c-text").value.trim();
-  if (!refVoice) throw new Error("请先上传参考音频");
+  if (rec) throw new Error("请先停止录制");
+  if (!refVoice) throw new Error("请先上传参考音频或使用麦克风录制");
   if (!text) throw new Error("请填写要朗读的文本");
   const b64 = await requestAudio({
     model: "mimo-v2.5-tts-voiceclone",
